@@ -1,0 +1,131 @@
+From 853aef386a56ccd334b6ae9ee6ac9d2f5652cbd5 Mon Sep 17 00:00:00 2001
+From: Martin Gauk <gauk@math.tu-berlin.de>
+Date: Tue, 20 Jun 2017 14:40:21 +0000
+Subject: [PATCH] [ISIS] Check file license and expiry date
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Used to conform to law (§ 52a UrhG) and to make
+copyrighted texts unavailable to students.
+
+lib/filestorage/zip_packer.php is changed because mod_folder
+allows to bulk download files as a zip through this class.
+---
+ lang/en/license.php             |  2 ++
+ lib/filelib.php                 |  2 ++
+ lib/filestorage/stored_file.php | 57 +++++++++++++++++++++++++++++++++++++++++
+ lib/filestorage/zip_packer.php  |  5 ++++
+ 4 files changed, 66 insertions(+)
+
+diff --git a/lang/en/license.php b/lang/en/license.php
+index cf25bce..45e264b 100644
+--- a/lang/en/license.php
++++ b/lang/en/license.php
+@@ -22,6 +22,8 @@
+  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+  */
+ 
++$string['fileexpired'] = 'The requested file is no longer available for copyright reasons. If you think the file is blocked for no reason, please contact a teacher.';
++
+ $string['allrightsreserved'] = 'All rights reserved';
+ $string['cc'] = 'Creative Commons';
+ $string['cc-nc'] = 'Creative Commons - No Commercial';
+diff --git a/lib/filelib.php b/lib/filelib.php
+index b568436..4c2b0b4 100644
+--- a/lib/filelib.php
++++ b/lib/filelib.php
+@@ -2288,6 +2288,8 @@ function send_file($path, $filename, $lifetime = null , $filter=0, $pathisstring
+ function send_stored_file($stored_file, $lifetime=null, $filter=0, $forcedownload=false, array $options=array()) {
+     global $CFG, $COURSE;
+ 
++    $stored_file->check_mimetype_license_expiry_date(true); // ISIS, MG, 20.06.2017
++
+     if (empty($options['filename'])) {
+         $filename = null;
+     } else {
+diff --git a/lib/filestorage/stored_file.php b/lib/filestorage/stored_file.php
+index 7d3b64f..9ddd2de 100644
+--- a/lib/filestorage/stored_file.php
++++ b/lib/filestorage/stored_file.php
+@@ -1087,4 +1087,61 @@ class stored_file {
+         // Generate the resized image.
+         return resize_image_from_image($original, $imageinfo, $width, $height);
+     }
++    
++    /**
++     * Check if a file with a specific license has expired.
++     *
++     * This checks if a file has been expired because:
++     *  - it is a document (has a particular mimetype),
++     *  - has been provided under a specific license
++     *  - and the expiry date has exceeded (in respect of the course start date and the file creation time).
++     *
++     * Users with moodle/course:managefiles right (teachers) are always allowed to access the files.
++     *
++     * The following settings need to be defined in the config.php:
++     *   array $CFG->fileexpirylicenses which licenses (shortnames) expire
++     *   int $CFG->fileexpirydate when do files expire (unix time)
++     *   array $CFG->filemimetypes['document'] mime types of documents
++     *
++     * These adjustments were made by Technische Universität Berlin in order to conform to § 52a UrhG.
++     *
++     * @param bool $exit if true, terminate execution with a message
++     * @return boolean whether file is allowed to be delivered
++     * @copyright 2017 Martin Gauk (ISIS, innoCampus, TU Berlin)
++     */
++    public function check_mimetype_license_expiry_date($exit = false) {
++        global $CFG, $COURSE;
++
++        // Check if enabled/configured.
++        if (!isset($CFG->fileexpirydate, $CFG->fileexpirylicenses, $CFG->filemimetypes['document'])) {
++            return true;
++        }
++
++        if (in_array($this->get_license(), $CFG->fileexpirylicenses) &&
++                !has_capability('moodle/course:managefiles', context::instance_by_id($this->get_contextid(), MUST_EXIST))) {
++            $isdoc = false;
++            $fmimetype = $this->get_mimetype();
++            foreach ($CFG->filemimetypes['document'] as $mime) {
++                if ($mime === $fmimetype || (substr($mime, -1) === '%' && strncmp($mime, $fmimetype, strlen($mime) - 1) === 0)) {
++                    $isdoc = true;
++                    break;
++                }
++            }
++            $coursestart = isset($COURSE->startdate) ? $COURSE->startdate : 0;
++            if ($isdoc && $CFG->fileexpirydate > max($coursestart, $this->get_timecreated())) {
++                if ($exit) {
++                    global $OUTPUT, $PAGE;
++                    http_response_code(451);
++                    $PAGE->set_title('451 Unavailable For Legal Reasons');
++                    echo $OUTPUT->header();
++                    \core\notification::add(get_string('fileexpired', 'core_license'), \core\output\notification::NOTIFY_ERROR);
++                    echo $OUTPUT->footer();
++                    exit();
++                }
++                return false;
++            }
++        }
++
++        return true;
++    }
+ }
+diff --git a/lib/filestorage/zip_packer.php b/lib/filestorage/zip_packer.php
+index 47395f7..a13b3d9 100644
+--- a/lib/filestorage/zip_packer.php
++++ b/lib/filestorage/zip_packer.php
+@@ -199,6 +199,11 @@ class zip_packer extends file_packer {
+             if (!$file->is_directory()) {
+                 $path = $path.$file->get_filename();
+             }
++
++            if (!$file->check_mimetype_license_expiry_date()) { // ISIS, MG, 20.06.2017
++                continue; // ISIS, MG, 20.06.2017
++            } // ISIS, MG, 20.06.2017
++
+             // Ignore result here, partial zipping is ok for now.
+             $file->archive_file($ziparch, $path);
+         }
+-- 
+2.1.4
+
